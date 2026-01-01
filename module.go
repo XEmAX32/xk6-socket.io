@@ -17,11 +17,28 @@ const engineIOVersion = 4
 type rootModule struct{}
 
 func (*rootModule) NewModuleInstance(vu modules.VU) modules.Instance {
-	return &module{vu}
+	runtime := vu.Runtime()
+
+	// require("k6/ws")
+	reqValue := runtime.Get("require")
+	requireFunction, ok := sobek.AssertFunction(reqValue)
+	if !ok { panic(runtime.ToValue(`require() not available in init stage`)) }	
+	
+	wsModuleValue, err := requireFunction(sobek.Undefined(), runtime.ToValue("k6/ws"))
+	if err != nil { panic(err) }
+
+	wsModuleObj := wsModuleValue.ToObject(runtime)
+	connectFunction := requireMethod(runtime, wsModuleObj, "connect")
+
+	return &module{
+		vu: 			 vu,
+		wsConnect: connectFunction,
+	}
 }
 
 type module struct {
 	vu modules.VU
+	wsConnect sobek.Callable
 }
 
 func (m *module) Exports() modules.Exports {
@@ -68,15 +85,15 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 		handlerFunction = _handlerFunction
 	}
 
-	// require("k6/ws")
-	reqValue := runtime.Get("require")
-	requireFunction, ok := sobek.AssertFunction(reqValue)
-	if !ok { return nil, fmt.Errorf("require() not available") }	
+	// // require("k6/ws")
+	// reqValue := runtime.Get("require")
+	// requireFunction, ok := sobek.AssertFunction(reqValue)
+	// if !ok { return nil, fmt.Errorf("require() not available") }	
 	
-	wsModuleValue, err := requireFunction(sobek.Undefined(), runtime.ToValue("k6/ws"))
-	if err != nil { return nil, err }
-	wsModuleObj := wsModuleValue.ToObject(runtime)
-	connectFunction := requireMethod(runtime, wsModuleObj, "connect")
+	// wsModuleValue, err := requireFunction(sobek.Undefined(), runtime.ToValue("k6/ws"))
+	// if err != nil { return nil, err }
+	// wsModuleObj := wsModuleValue.ToObject(runtime)
+	// connectFunction := requireMethod(runtime, wsModuleObj, "connect")
 
 	callback := runtime.ToValue(func(callbackContext sobek.FunctionCall) sobek.Value {
 		connected := false
@@ -104,6 +121,29 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				panic(err)
 			}
 		}
+
+		wrapper := runtime.NewObject()
+    wrapper.SetPrototype(socketObject)
+
+		// inject emit method
+		wrapper.Set("emit", runtime.ToValue(func(emitContext sobek.FunctionCall) sobek.Value {
+			if len(emitContext.Arguments) == 0 { panic(runtime.ToValue("emit(event, data): missing event")) }
+			event := emitContext.Argument(0).String()
+
+			data := sobek.Undefined()
+			if len(emitContext.Arguments) > 1 { data = emitContext.Argument(1) }
+
+			emitFunction(event, data)
+			return sobek.Undefined()
+		}))
+
+		// inject send method
+		wrapper.Set("send", runtime.ToValue(func(sendContext sobek.FunctionCall) sobek.Value {
+			if len(sendContext.Arguments) == 0 { panic(runtime.ToValue("send(data): missing data")) }
+
+			emitFunction("message", sendContext.Argument(0))
+			return sobek.Undefined()
+		}))
 
 		msgHandler := runtime.ToValue(func(msgHandlerContext sobek.FunctionCall) sobek.Value {
 			msg := msgHandlerContext.Argument(0).String()
@@ -150,29 +190,10 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 			panic(err)
 		}
 
-		// inject emit method
-		socketObject.Set("emit", runtime.ToValue(func(emitContext sobek.FunctionCall) sobek.Value {
-			if len(emitContext.Arguments) == 0 { panic(runtime.ToValue("emit(event, data): missing event")) }
-			event := emitContext.Argument(0).String()
-
-			data := sobek.Undefined()
-			if len(emitContext.Arguments) > 1 { data = emitContext.Argument(1) }
-
-			emitFunction(event, data)
-			return sobek.Undefined()
-		}))
-
-		// inject send method
-		socketObject.Set("send", runtime.ToValue(func(sendContext sobek.FunctionCall) sobek.Value {
-			if len(sendContext.Arguments) == 0 { panic(runtime.ToValue("send(data): missing data")) }
-
-			emitFunction("message", sendContext.Argument(0))
-			return sobek.Undefined()
-		}))
-
 		// run handler and exit
 		if handlerFunction != nil {
-			if _, err := handlerFunction(sobek.Undefined(), socketValue); err != nil {
+			// panic(runtime.ToValue("we have handler"))
+			if _, err := handlerFunction(sobek.Undefined(), wrapper); err != nil {
 				panic(err)
 			} 
 		}
@@ -181,7 +202,7 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 	})
 
 
-	return connectFunction(
+	return m.wsConnect(
 		sobek.Undefined(),
 		runtime.ToValue(websocketURL),
 		runtime.ToValue(options.Params),
