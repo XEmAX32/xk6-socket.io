@@ -117,7 +117,7 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 
 			packet := "42" + stringifiedArray.String()
 
-			if _, err := sendFunction(socketObject, runtime.ToValue(packet)); err != nil {
+			if _, err := sendFunction(socketValue, runtime.ToValue(packet)); err != nil {
 				panic(err)
 			}
 		}
@@ -127,6 +127,8 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 
 		// inject emit method
 		wrapper.Set("emit", runtime.ToValue(func(emitContext sobek.FunctionCall) sobek.Value {
+			if !connected { panic(runtime.ToValue("connection not esablished")) }
+
 			if len(emitContext.Arguments) == 0 { panic(runtime.ToValue("emit(event, data): missing event")) }
 			event := emitContext.Argument(0).String()
 
@@ -147,24 +149,31 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 
 		msgHandler := runtime.ToValue(func(msgHandlerContext sobek.FunctionCall) sobek.Value {
 			msg := msgHandlerContext.Argument(0).String()
-			
+			fmt.Println("connection status: ", connected, "message:  ", msg)
+
 			// Engine.IO ping -> pong
 			if msg == "2" {
-				_, err = sendFunction(socketObject, runtime.ToValue("3"))
-				if err != nil { panic(runtime.ToValue(err)) }
+				if _, err := sendFunction(socketValue, runtime.ToValue("3")); err != nil {
+					panic(err)
+				}
+
 				return sobek.Undefined()
 			}
 
-			if msg == "40" {
+			if strings.HasPrefix(msg, "40") {
 				fmt.Println("received 40, ", connected)
 
 				connected = true
 				return sobek.Undefined()
 			}
 
+			if msg == "1" || msg == "41" {
+
+			}
+
 			if strings.HasPrefix(msg, "0") {
 				if connected { return sobek.Undefined() }
-				fmt.Println("going through, ", connected)
+				fmt.Println("going through, ", connected, msg)
 
 				packet := "40"
 
@@ -188,7 +197,7 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				}
 				fmt.Println("here %s", packet)
 
-				if _, err := sendFunction(socketObject, runtime.ToValue(packet)); err != nil {
+				if _, err := sendFunction(socketValue, runtime.ToValue(packet)); err != nil {
 					panic(err)
 				}
 
@@ -198,7 +207,7 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 			return sobek.Undefined()
 		}) 
 
-		if _, err := onCallbackFunction(socketObject, runtime.ToValue("message"), msgHandler); err != nil {
+		if _, err := onCallbackFunction(socketValue, runtime.ToValue("message"), msgHandler); err != nil {
 			panic(err)
 		}
 
