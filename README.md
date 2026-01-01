@@ -117,7 +117,7 @@ All options are optional.
 | `query` | object | `{}` | Query parameters appended to the URL. |
 | `params` | object | `{}` | Passed directly to `k6/ws.connect` (e.g. headers, tags). |
 
-## Development
+<!-- ## Development
 
 Run Go tests:
 
@@ -130,7 +130,7 @@ Run the Socket.IO JS test (requires a running server):
 ```shell
 node test/sio-test/server.js
 ./k6 run test/socketio.test.js
-```
+``` -->
 
 ## Compatibility and limitations
 
@@ -141,6 +141,7 @@ node test/sio-test/server.js
 
 ## TODO
 
+- [ ] Tests
 - [ ] Namespaces support (including dynamic namespace handling).
 - [ ] Connection state recovery / session ID handling.
 - [ ] Authentication middleware / auth payload support.
