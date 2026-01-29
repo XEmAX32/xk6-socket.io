@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strings"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/grafana/sobek"
 	"go.k6.io/k6/js/modules"
@@ -21,29 +22,33 @@ func (*rootModule) NewModuleInstance(vu modules.VU) modules.Instance {
 	// require("k6/ws")
 	reqValue := runtime.Get("require")
 	requireFunction, ok := sobek.AssertFunction(reqValue)
-	if !ok { panic(runtime.ToValue(`require() not available in init stage`)) }	
-	
+	if !ok {
+		panic(runtime.ToValue(`require() not available in init stage`))
+	}
+
 	wsModuleValue, err := requireFunction(sobek.Undefined(), runtime.ToValue("k6/ws"))
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 
 	wsModuleObj := wsModuleValue.ToObject(runtime)
 	connectFunction := requireMethod(runtime, wsModuleObj, "connect")
 
 	return &module{
-		vu: 			 vu,
+		vu:        vu,
 		wsConnect: connectFunction,
 	}
 }
 
 type module struct {
-	vu modules.VU
+	vu        modules.VU
 	wsConnect sobek.Callable
 }
 
 func (m *module) Exports() modules.Exports {
 	return modules.Exports{
 		Named: map[string]any{
-			"io":  m.io,
+			"io": m.io,
 		},
 	}
 }
@@ -56,16 +61,17 @@ type Options struct {
 	Auth      map[string]any `json:"auth"`
 	Query     map[string]any `json:"query"`
 	Params    map[string]any `json:"params"`
+	Timeout   int            `json:"timeout"`
 }
 
 var EngineIOCodes = struct {
-	Open     string
-	Close    string
-	Ping     string
-	Pong     string
-	Message  string
-	Upgrade  string
-	Noop     string
+	Open    string
+	Close   string
+	Ping    string
+	Pong    string
+	Message string
+	Upgrade string
+	Noop    string
 }{
 	Open:    "0",
 	Close:   "1",
@@ -77,13 +83,13 @@ var EngineIOCodes = struct {
 }
 
 var SocketIOCodes = struct {
-	Connect      string
-	Disconnect   string
-	Event        string
-	Ack          string
-	Error        string
-	BinaryEvent  string
-	BinaryAck    string
+	Connect     string
+	Disconnect  string
+	Event       string
+	Ack         string
+	Error       string
+	BinaryEvent string
+	BinaryAck   string
 }{
 	Connect:     "0",
 	Disconnect:  "1",
@@ -104,18 +110,31 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 		}
 	}
 
-	if options.Path == "" { options.Path = "/socket.io/" }
-	if options.Namespace == "" { options.Namespace = "/" }
-	if options.Params == nil { options.Params = map[string]any{} }
+	if options.Path == "" {
+		options.Path = "/socket.io/"
+	}
+	if options.Namespace == "" {
+		options.Namespace = "/"
+	}
+	if options.Params == nil {
+		options.Params = map[string]any{}
+	}
+	if options.Timeout <= 0 {
+		options.Timeout = 10
+	}
 
 	websocketURL, err := buildSocketIOWSURL(host, options)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	var handlerFunction sobek.Callable
 	if handler != nil && !sobek.IsUndefined(handler) && !sobek.IsNull(handler) {
 		_handlerFunction, ok := sobek.AssertFunction(handler)
-		if !ok { return nil, fmt.Errorf("handler must be a function") }
-	
+		if !ok {
+			return nil, fmt.Errorf("handler must be a function")
+		}
+
 		// if _, herr := hfn(sobek.Undefined(), socket); herr != nil { panic(herr) }
 		handlerFunction = _handlerFunction
 	}
@@ -123,8 +142,8 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 	// // require("k6/ws")
 	// reqValue := runtime.Get("require")
 	// requireFunction, ok := sobek.AssertFunction(reqValue)
-	// if !ok { return nil, fmt.Errorf("require() not available") }	
-	
+	// if !ok { return nil, fmt.Errorf("require() not available") }
+
 	// wsModuleValue, err := requireFunction(sobek.Undefined(), runtime.ToValue("k6/ws"))
 	// if err != nil { return nil, err }
 	// wsModuleObj := wsModuleValue.ToObject(runtime)
@@ -132,6 +151,7 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 
 	callback := runtime.ToValue(func(callbackContext sobek.FunctionCall) sobek.Value {
 		var connected = false
+		var connectionEstablished = false
 		var pendingEmits []func()
 		var callbackHandlers = map[string][]sobek.Callable{}
 
@@ -148,19 +168,23 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 			if list, ok := callbackHandlers[event]; ok {
 				for _, handler := range list {
 					_, err = handler(sobek.Undefined(), runtime.ToValue(payload))
-					if err != nil { fmt.Println("event dispatch error") }
+					if err != nil {
+						fmt.Println("event dispatch error")
+					}
 				}
 			}
 		}
-		
-		emitFunction := func(event string, data sobek.Value) {
-			send := func() {
-        array := runtime.NewArray()
-        _ = array.Set("0", runtime.ToValue(event))
-        _ = array.Set("1", data)
 
-        str, _ := jsonStringifyFunction(sobek.Undefined(), array)
-        packet := EngineIOCodes.Message + SocketIOCodes.Event + str.String()
+		emitFunction := func(event string, args []sobek.Value) {
+			send := func() {
+				array := runtime.NewArray()
+				_ = array.Set("0", runtime.ToValue(event))
+				for i, arg := range args {
+					_ = array.Set(strconv.Itoa(i+1), arg)
+				}
+
+				str, _ := jsonStringifyFunction(sobek.Undefined(), array)
+				packet := EngineIOCodes.Message + SocketIOCodes.Event + str.String()
 
 				if _, err := sendFunction(socketValue, runtime.ToValue(packet)); err != nil {
 					panic(err)
@@ -168,77 +192,96 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 			}
 
 			if !connected {
-					pendingEmits = append(pendingEmits, send)
-					return
+				pendingEmits = append(pendingEmits, send)
+				return
 			}
 
 			send()
 		}
 
 		wrapper := runtime.NewObject()
-    err = wrapper.SetPrototype(socketObject)
-		if err != nil { fmt.Println("error while setting up prototype") }
+		err = wrapper.SetPrototype(socketObject)
+		if err != nil {
+			fmt.Println("error while setting up prototype")
+		}
 
 		// inject emit method
 		err = wrapper.Set("emit", runtime.ToValue(func(emitContext sobek.FunctionCall) sobek.Value {
-			if len(emitContext.Arguments) == 0 { panic(runtime.ToValue("emit(event, data): missing event")) }
+			if len(emitContext.Arguments) == 0 {
+				panic(runtime.ToValue("emit(event, ...args): missing event"))
+			}
 			event := emitContext.Argument(0).String()
 
-			data := sobek.Undefined()
-			if len(emitContext.Arguments) > 1 { data = emitContext.Argument(1) }
+			var args []sobek.Value
+			if len(emitContext.Arguments) > 1 {
+				args = emitContext.Arguments[1:]
+			}
 
-			emitFunction(event, data)
+			emitFunction(event, args)
 			return sobek.Undefined()
 		}))
 
-		if err != nil { fmt.Println("error while adding emit to socket prototype") }
+		if err != nil {
+			fmt.Println("error while adding emit to socket prototype")
+		}
 
 		// inject send method
 		err = wrapper.Set("send", runtime.ToValue(func(sendContext sobek.FunctionCall) sobek.Value {
-			if len(sendContext.Arguments) == 0 { panic(runtime.ToValue("send(data): missing data")) }
+			if len(sendContext.Arguments) == 0 {
+				panic(runtime.ToValue("send(data): missing data"))
+			}
 
-			emitFunction("message", sendContext.Argument(0))
+			emitFunction("message", []sobek.Value{sendContext.Argument(0)})
 			return sobek.Undefined()
 		}))
 
-		if err != nil { fmt.Println("error while adding send to socket prototype") }
-
+		if err != nil {
+			fmt.Println("error while adding send to socket prototype")
+		}
 
 		err = wrapper.Set("on", runtime.ToValue(func(eventHandlerContext sobek.FunctionCall) sobek.Value {
-			if len(eventHandlerContext.Arguments) == 0 { panic(runtime.ToValue("on(event, handler): missing event")) }
+			if len(eventHandlerContext.Arguments) == 0 {
+				panic(runtime.ToValue("on(event, handler): missing event"))
+			}
 
 			eventType := eventHandlerContext.Argument(0).String()
 			handlerValue := eventHandlerContext.Argument(1)
 			var handlerFunction sobek.Callable
 			if handlerValue != nil && !sobek.IsUndefined(handlerValue) && !sobek.IsNull(handlerValue) {
 				_handlerFunction, ok := sobek.AssertFunction(handlerValue)
-				if !ok { panic(runtime.ToValue("on(event, handler): handler must be a function")) }
-			
+				if !ok {
+					panic(runtime.ToValue("on(event, handler): handler must be a function"))
+				}
+
 				handlerFunction = _handlerFunction
 			}
 
-			if (eventType == "connect") {
+			if eventType == "connect" {
 				callbackHandlers["connect"] = append(callbackHandlers["connect"], handlerFunction)
 				return sobek.Undefined()
 			}
 
-			if (eventType == "disconnect") {
+			if eventType == "disconnect" {
 				callbackHandlers["disconnect"] = append(callbackHandlers["disconnect"], handlerFunction)
 				return sobek.Undefined()
 			}
-		
+
+			if eventType == "error" {
+				callbackHandlers["error"] = append(callbackHandlers["error"], handlerFunction)
+				return sobek.Undefined()
+			}
+
 			if _, err := onCallbackFunction(socketValue, runtime.ToValue("message"), runtime.ToValue(func(msgHandlerContext sobek.FunctionCall) sobek.Value {
 				msg := msgHandlerContext.Argument(0).String()
 
-
-				if strings.HasPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Event) {
-					trimmed := strings.TrimPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Event)
+				if strings.HasPrefix(msg, EngineIOCodes.Message+SocketIOCodes.Event) {
+					trimmed := strings.TrimPrefix(msg, EngineIOCodes.Message+SocketIOCodes.Event)
 					event, data, _ := extractEvent(trimmed)
 
-					if (eventType == event) {
+					if eventType == event {
 						if _, err := handlerFunction(sobek.Undefined(), runtime.ToValue(data)); err != nil {
 							panic(err)
-						} 
+						}
 					}
 				}
 
@@ -250,8 +293,9 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 			return sobek.Undefined()
 		}))
 
-		if err != nil { fmt.Println("error while adding on to socket prototype") }
-
+		if err != nil {
+			fmt.Println("error while adding on to socket prototype")
+		}
 
 		msgHandler := runtime.ToValue(func(msgHandlerContext sobek.FunctionCall) sobek.Value {
 			msg := msgHandlerContext.Argument(0).String()
@@ -265,8 +309,9 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				return sobek.Undefined()
 			}
 
-			if strings.HasPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Connect) {
+			if strings.HasPrefix(msg, EngineIOCodes.Message+SocketIOCodes.Connect) {
 				connected = true
+				connectionEstablished = true
 
 				// fmt.Println("pendings", pendingEmits)
 
@@ -281,7 +326,7 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				return sobek.Undefined()
 			}
 
-			if msg == EngineIOCodes.Close || msg == EngineIOCodes.Message + SocketIOCodes.Disconnect {
+			if msg == EngineIOCodes.Close || msg == EngineIOCodes.Message+SocketIOCodes.Disconnect {
 				connected = false
 
 				dispatch("disconnect", nil)
@@ -292,13 +337,30 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				closeFn := requireMethod(runtime, socketObject, "close")
 				_, err = closeFn(socketObject)
 
-				if err != nil { fmt.Println("error while closing ws") }
+				if err != nil {
+					fmt.Println("error while closing ws")
+				}
+
+				return sobek.Undefined()
+			}
+
+			// Handle Socket.IO error messages
+			if strings.HasPrefix(msg, EngineIOCodes.Message+SocketIOCodes.Error) {
+				trimmed := strings.TrimPrefix(msg, EngineIOCodes.Message+SocketIOCodes.Error)
+
+				errorObj := runtime.NewObject()
+				_ = errorObj.Set("message", runtime.ToValue(trimmed))
+				_ = errorObj.Set("type", runtime.ToValue("socketio"))
+
+				dispatch("error", errorObj)
 
 				return sobek.Undefined()
 			}
 
 			if strings.HasPrefix(msg, EngineIOCodes.Open) {
-				if connected { return sobek.Undefined() }
+				if connected {
+					return sobek.Undefined()
+				}
 				//fmt.Println("going through, ", connected, msg)
 
 				packet := EngineIOCodes.Message + SocketIOCodes.Connect
@@ -331,29 +393,87 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 			}
 
 			return sobek.Undefined()
-		}) 
+		})
 
 		if _, err := onCallbackFunction(socketValue, runtime.ToValue("message"), msgHandler); err != nil {
 			panic(err)
 		}
 
+		// Subscribe to WebSocket error event
+		errorHandler := runtime.ToValue(func(errorHandlerContext sobek.FunctionCall) sobek.Value {
+			errorMsg := errorHandlerContext.Argument(0)
+
+			// Dispatch error to Socket.IO error handlers
+			dispatch("error", errorMsg)
+
+			return sobek.Undefined()
+		})
+
+		if _, err := onCallbackFunction(socketValue, runtime.ToValue("error"), errorHandler); err != nil {
+			panic(err)
+		}
+
+		// Connection timeout mechanism
+		go func() {
+			timeoutDuration := time.Duration(options.Timeout) * time.Second
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+
+			timeoutTimer := time.After(timeoutDuration)
+
+			for {
+				select {
+				case <-timeoutTimer:
+					// Timeout reached
+					if !connectionEstablished {
+						errorObj := runtime.NewObject()
+						_ = errorObj.Set("message", runtime.ToValue("Connection timeout: failed to establish connection"))
+						_ = errorObj.Set("type", runtime.ToValue("timeout"))
+						dispatch("error", errorObj)
+					}
+					return
+				case <-ticker.C:
+					// Check if connection established
+					if connectionEstablished {
+						return
+					}
+				}
+			}
+		}()
+
 		// run handler
 		if handlerFunction != nil {
 			if _, err := handlerFunction(sobek.Undefined(), wrapper); err != nil {
 				panic(err)
-			} 
+			}
 		}
-		
+
 		return sobek.Undefined()
 	})
 
-
-	return m.wsConnect(
+	res, err := m.wsConnect(
 		sobek.Undefined(),
 		runtime.ToValue(websocketURL),
 		runtime.ToValue(options.Params),
 		callback,
 	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	resObj := res.ToObject(runtime)
+	status := resObj.Get("status")
+
+	if status != nil && status.ToInteger() >= 400 {
+		return nil, fmt.Errorf(
+			"socket.io connect failed: %d (%s)",
+			status.ToInteger(),
+			websocketURL,
+		)
+	}
+
+	return res, nil
 }
 
 func requireMethod(runtime *sobek.Runtime, obj *sobek.Object, name string) sobek.Callable {
@@ -368,16 +488,18 @@ func requireMethod(runtime *sobek.Runtime, obj *sobek.Object, name string) sobek
 
 func buildSocketIOWSURL(host string, opts Options) (string, error) {
 	_url, err := url.Parse(host)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 
 	switch _url.Scheme {
-		case "http":
-			_url.Scheme = "ws"
-		case "https":
-			_url.Scheme = "wss"
-		case "ws", "wss":
-		default:
-			return "", fmt.Errorf("unsupported scheme: %s", _url.Scheme)
+	case "http":
+		_url.Scheme = "ws"
+	case "https":
+		_url.Scheme = "wss"
+	case "ws", "wss":
+	default:
+		return "", fmt.Errorf("unsupported scheme: %s", _url.Scheme)
 	}
 
 	path := opts.Path
@@ -406,13 +528,15 @@ func extractEvent(msg string) (string, any, error) {
 		return "", nil, err
 	}
 
-	event, ok := arr[0].(string); 
+	event, ok := arr[0].(string)
 	if !ok {
 		return "", nil, fmt.Errorf("event is not a string")
 	}
 
 	var data any
-	if len(arr) > 1 {
+	if len(arr) > 2 {
+		data = arr[1:]
+	} else if len(arr) > 1 {
 		data = arr[1]
 	}
 

@@ -76,7 +76,15 @@ func TestExtractEvent(t *testing.T) {
 	event, data, err := extractEvent(`["hello", {"msg": "hi"}]`)
 	require.NoError(t, err)
 	require.Equal(t, "hello", event)
-	require.Equal(t, map[string]any{"msg": "hi"}, data)
+	require.Equal(t, []any{map[string]any{"msg": "hi"}}, data)
+
+	event, data, err = extractEvent(`["user_updated", {"id": 1}, {"name": "Alice"}]`)
+	require.NoError(t, err)
+	require.Equal(t, "user_updated", event)
+	require.Equal(t, []any{
+		map[string]any{"id": float64(1)},
+		map[string]any{"name": "Alice"},
+	}, data)
 
 	event, data, err = extractEvent(`["ping"]`)
 	require.NoError(t, err)
