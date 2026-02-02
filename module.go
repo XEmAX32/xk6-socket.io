@@ -313,10 +313,7 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				connected = true
 				connectionEstablished = true
 
-				// fmt.Println("pendings", pendingEmits)
-
 				for _, fn := range pendingEmits {
-					//fmt.Println("going through pending")
 					fn()
 				}
 				pendingEmits = nil
@@ -361,7 +358,6 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				if connected {
 					return sobek.Undefined()
 				}
-				//fmt.Println("going through, ", connected, msg)
 
 				packet := EngineIOCodes.Message + SocketIOCodes.Connect
 
@@ -383,7 +379,6 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 						packet = packet + string(bearer)
 					}
 				}
-				//fmt.Printf("here %s", packet)
 
 				if _, err := sendFunction(socketValue, runtime.ToValue(packet)); err != nil {
 					panic(err)
@@ -521,11 +516,15 @@ func buildSocketIOWSURL(host string, opts Options) (string, error) {
 	return _url.String(), nil
 }
 
-func extractEvent(msg string) (string, any, error) {
+func extractEvent(msg string) (string, []any, error) {
 	var arr []any
 
 	if err := json.Unmarshal([]byte(msg), &arr); err != nil {
 		return "", nil, err
+	}
+
+	if len(arr) == 0 {
+		return "", nil, fmt.Errorf("empty event payload")
 	}
 
 	event, ok := arr[0].(string)
@@ -533,12 +532,9 @@ func extractEvent(msg string) (string, any, error) {
 		return "", nil, fmt.Errorf("event is not a string")
 	}
 
-	var data any
-	if len(arr) > 2 {
-		data = arr[1:]
-	} else if len(arr) > 1 {
-		data = arr[1]
+	if len(arr) == 1 {
+		return event, nil, nil
 	}
 
-	return event, data, nil
+	return event, arr[1:], nil
 }
