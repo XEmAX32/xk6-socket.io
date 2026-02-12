@@ -10,22 +10,21 @@ export const options = {
 
 export default function () {
 
-  io("http://localhost:4000", {}, (socket) => {
+  io("http://localhost:4000", { namespace: "chat" }, (socket) => {
     let connected = false;
 
-    socket.on("connect", (data) => {
+    socket.on("connect", () => {
       console.log('yo')
-      console.log('data', data)
+      socket.emit("message", { test: "test" })
     })
 
     socket.on("disconnect", () => {
       console.log('closed')
     })
 
-    socket.on("hello_back", (msg) => {
-      console.log('getting from helloback ', msg.got)
+    socket.on("message", (msg) => {
+      console.log('getting msg ', msg)
     })
-    socket.emit("hello", { test: "test" })
 
   });
 
