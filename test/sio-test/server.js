@@ -28,11 +28,10 @@ const chat = io.of("/chat");
 
 
 chat.use((socket, next) => {
-  const { token } = socket.handshake.auth; // from 40/chat,{"token":...}
-console.log('token', socket.handshake.auth, token)
+  const { token } = socket.handshake.auth; 
+
   if (!token) return next(new Error("unauthorized"));
 
-  // TODO: validate token (JWT verify, DB lookup, etc.)
   if (token !== "123") return next(new Error("unauthorized"));
 
   // you can attach user info
