@@ -10,7 +10,7 @@ export const options = {
 
 export default function () {
 
-  io("http://localhost:4000", { namespace: "chat", auth: { token: "3123" } }, (socket) => {
+  io("http://localhost:4000", { namespace: "chat", auth: { token: "3123" }, params: { headers: { token: "123"}} }, (socket) => {
     let connected = false;
 
     socket.on("connect", () => {

@@ -280,7 +280,7 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				if strings.HasPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Event) {
 					trimmed := strings.TrimPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Event)
 					// handle namespace in pckg
-					namespace, trimmed := extractNamespace(msg)
+					namespace, trimmed = extractNamespace(msg)
 					if (namespace != options.Namespace) { return sobek.Undefined() }
 
 					event, data, _ := extractEvent(trimmed)
@@ -352,10 +352,10 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 
 			// Handle Socket.IO error messages
 			if strings.HasPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Error) {
-				trimmed := strings.TrimPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Error)
+				trimmedError := strings.TrimPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Error)
 
 				errorObj := runtime.NewObject()
-				_ = errorObj.Set("message", runtime.ToValue(trimmed))
+				_ = errorObj.Set("message", runtime.ToValue(trimmedError))
 				_ = errorObj.Set("type", runtime.ToValue("socketio"))
 
 				dispatch("error", errorObj)
