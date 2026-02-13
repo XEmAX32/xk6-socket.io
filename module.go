@@ -280,16 +280,8 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				if strings.HasPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Event) {
 					trimmed := strings.TrimPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Event)
 					// handle namespace in pckg
-					if strings.HasPrefix(trimmed, "/") {
-						commaSeparatorIndex := strings.IndexByte(trimmed, ',')
-
-						if commaSeparatorIndex == -1 { fmt.Println("error: corrupted payload") }
-
-						namespace := trimmed[:commaSeparatorIndex]
-
-						if (namespace != options.Namespace) { return sobek.Undefined() }
-						trimmed = trimmed[commaSeparatorIndex + 1:]
-					}
+					namespace, trimmed := extractNamespace(msg)
+					if (namespace != options.Namespace) { return sobek.Undefined() }
 
 					event, data, _ := extractEvent(trimmed)
 
@@ -380,22 +372,18 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				packet := EngineIOCodes.Message + SocketIOCodes.Connect
 
 				// handle namespace
-				namespace := options.Namespace
-				if namespace != "" && namespace != "/" {
-					if !strings.HasPrefix(namespace, "/") {
-						namespace = "/" + namespace
-					}
-					packet = packet + namespace
+				if options.Namespace != "" && options.Namespace != "/" {
+					packet = packet + options.Namespace
 				}
 
 				// handle authentication
 				if options.Auth != nil {
 					bearer, _ := json.Marshal(options.Auth)
-					if namespace != "" && namespace != "/" {
-						packet = packet + "," + string(bearer)
-					} else {
-						packet = packet + string(bearer)
+					if options.Namespace != "" && options.Namespace != "/" {
+						packet = packet + ","
 					}
+
+					packet = packet + string(bearer)
 				}
 
 				if _, err := sendFunction(socketValue, runtime.ToValue(packet)); err != nil {
@@ -556,4 +544,18 @@ func extractEvent(msg string) (string, []any, error) {
 	}
 
 	return event, payload[1:], nil
+}
+
+func extractNamespace(msg string) (string, string) {
+	if strings.HasPrefix(msg, "/") {
+		commaSeparatorIndex := strings.IndexByte(msg, ',')
+
+		if commaSeparatorIndex == -1 { fmt.Println("error: corrupted payload") }
+
+		namespace := msg[:commaSeparatorIndex]
+
+		return namespace, msg[commaSeparatorIndex + 1:]
+	}
+
+	return "/", msg
 }

@@ -10,7 +10,7 @@ export const options = {
 
 export default function () {
 
-  io("http://localhost:4000", { namespace: "chat" }, (socket) => {
+  io("http://localhost:4000", { namespace: "chat", auth: { token: "3123" } }, (socket) => {
     let connected = false;
 
     socket.on("connect", () => {
@@ -20,6 +20,10 @@ export default function () {
 
     socket.on("disconnect", () => {
       console.log('closed')
+    })
+
+    socket.on("error", (err) => {
+      console.log('error', err)
     })
 
     socket.on("message", (msg) => {
