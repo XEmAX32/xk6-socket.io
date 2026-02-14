@@ -43,9 +43,12 @@ chat.use((socket, next) => {
 chat.on("connection", (socket) => {
   console.log("connected to /chat:", socket.id);
 
-  socket.on("message", (data) => {
-    console.log("message(/chat):", data);
-    socket.emit("message", { text: "server got your message in /chat" });
+  socket.on("chat", (data, ack) => {
+    console.log("chat(/chat):", data);
+    // socket.emit("message", { text: "server got your message in /chat" });
+    if (typeof ack === "function") {
+      ack({ ok: true });
+    }
   });
 
   // emit to everyone in /chat

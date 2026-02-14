@@ -10,12 +10,14 @@ export const options = {
 
 export default function () {
 
-  io("http://localhost:4000", { namespace: "chat", auth: { token: "3123" }, params: { headers: { token: "123"}} }, (socket) => {
+  io("http://localhost:4000", { namespace: "chat", auth: { token: "123" }, params: { headers: { token: "123"}} }, (socket) => {
     let connected = false;
 
     socket.on("connect", () => {
       console.log('yo')
-      socket.emit("message", { test: "test" })
+      socket.emit("chat", {}, (data) => {
+        console.log('ack', data.ok)
+      })
     })
 
     socket.on("disconnect", () => {

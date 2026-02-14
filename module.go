@@ -152,6 +152,9 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 		var pendingEmits []func()
 		var callbackHandlers = map[string][]sobek.Callable{}
 
+		var ackIdCounter = 0
+		var ackStorage = map[int]sobek.Callable{}
+
 		socketValue := callbackContext.Argument(0)
 		socketObject := socketValue.ToObject(runtime)
 
@@ -172,7 +175,7 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 			}
 		}
 
-		emitFunction := func(event string, args []sobek.Value) {
+		emitFunction := func(event string, args []sobek.Value, _ackId *int) {
 			send := func() {
 				array := runtime.NewArray()
 				_ = array.Set("0", runtime.ToValue(event))
@@ -185,6 +188,9 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 
 				// add namespace
 				if options.Namespace != "/" { packet = packet + options.Namespace + ","  }
+
+				// add ack id 
+				if _ackId != nil { packet = packet + strconv.Itoa(*_ackId) }
 
 				packet = packet + str.String()
 
@@ -215,11 +221,24 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 			event := emitContext.Argument(0).String()
 
 			var args []sobek.Value
+			var currentAck *int = nil
+
 			if len(emitContext.Arguments) > 1 {
-				args = emitContext.Arguments[1:]
+				ackFunction, lastArgIsFunction := sobek.AssertFunction(emitContext.Arguments[len(emitContext.Arguments) - 1])
+
+				if lastArgIsFunction {
+					currentAck = &ackIdCounter
+					ackIdCounter++
+
+					args = emitContext.Arguments[1:len(emitContext.Arguments) - 1]
+					ackStorage[*currentAck] = ackFunction
+				} else {
+					args = emitContext.Arguments[1:]
+				}
+
 			}
 
-			emitFunction(event, args)
+			emitFunction(event, args, currentAck)
 
 			return sobek.Undefined()
 		}))
@@ -234,7 +253,19 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				panic(runtime.ToValue("send(data): missing data"))
 			}
 
-			emitFunction("message", []sobek.Value{sendContext.Argument(0)})
+			var currentAck *int = nil
+			if len(sendContext.Arguments) > 1 {
+				ackFunction, lastArgIsFunction := sobek.AssertFunction(sendContext.Arguments[1])
+
+				if lastArgIsFunction {
+					currentAck = &ackIdCounter
+					ackIdCounter++
+
+					ackStorage[*currentAck] = ackFunction
+				}
+			}
+
+			emitFunction("message", []sobek.Value{sendContext.Argument(0)}, currentAck)
 			return sobek.Undefined()
 		}))
 
@@ -278,9 +309,9 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				msg := msgHandlerContext.Argument(0).String()
 
 				if strings.HasPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Event) {
-					trimmed := strings.TrimPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Event)
+					msg = strings.TrimPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Event)
 					// handle namespace in pckg
-					namespace, trimmed = extractNamespace(msg)
+					namespace, trimmed := extractNamespace(msg)
 					if (namespace != options.Namespace) { return sobek.Undefined() }
 
 					event, data, _ := extractEvent(trimmed)
@@ -346,6 +377,52 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 				if err != nil {
 					fmt.Println("error while closing ws")
 				}
+
+				return sobek.Undefined()
+			}
+
+			// handle ACK
+			if strings.HasPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Ack) {
+				trimmed := strings.TrimPrefix(msg, EngineIOCodes.Message + SocketIOCodes.Ack)
+
+				namespace, trimmed2 := extractNamespace(trimmed)
+				if (namespace != options.Namespace) { return sobek.Undefined() }
+
+				payloadSeparatorIndex := strings.IndexByte(trimmed2, '[')
+				if payloadSeparatorIndex == -1 { 
+					return sobek.Undefined()
+				}
+
+				_ackIdString := trimmed2[:payloadSeparatorIndex]
+				_ackId, err := strconv.Atoi(_ackIdString)
+				if err != nil {
+						fmt.Println("error: corrupted payload (not a number)")
+						return sobek.Undefined()
+				}
+
+				cb, ok := ackStorage[_ackId]
+				if !ok {
+						fmt.Println("error: missing callback")
+						return sobek.Undefined()
+				}
+
+				var payload []any
+				if err := json.Unmarshal([]byte(trimmed2[payloadSeparatorIndex:]), &payload); err != nil {
+					fmt.Errorf("corrupted ACK payload")
+					return sobek.Undefined()
+				}
+
+				if len(payload) == 0 {
+					fmt.Errorf("empty ACK payload")
+					return sobek.Undefined()
+				}
+
+				_, err = cb(sobek.Undefined(), runtime.ToValue(payload[0]))
+				if err != nil {
+						panic(err)
+				}
+
+				delete(ackStorage, _ackId)
 
 				return sobek.Undefined()
 			}
@@ -508,7 +585,6 @@ func buildSocketIOWSURL(host string, opts Options) (string, error) {
 		path = "/" + path
 	}
 	_url.Path = path
-	fmt.Println("path", _url.Path)
 
 	_query := _url.Query()
 	_query.Set("EIO", strconv.Itoa(engineIOVersion))
