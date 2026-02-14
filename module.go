@@ -408,12 +408,12 @@ func (m *module) io(host string, optionsVal sobek.Value, handler sobek.Value) (s
 
 				var payload []any
 				if err := json.Unmarshal([]byte(trimmed2[payloadSeparatorIndex:]), &payload); err != nil {
-					fmt.Errorf("corrupted ACK payload")
+					fmt.Println("corrupted ACK payload")
 					return sobek.Undefined()
 				}
 
 				if len(payload) == 0 {
-					fmt.Errorf("empty ACK payload")
+					fmt.Println("empty ACK payload")
 					return sobek.Undefined()
 				}
 
