@@ -142,13 +142,7 @@ node test/sio-test/server.js
 ## TODO
 
 - [ ] Tests
-- [ ] Namespaces support (including dynamic namespace handling).
-- [ ] Connection state recovery / session ID handling.
-- [ ] Authentication middleware / auth payload support.
-- [ ] Client/server-side connect_error and error packet handling.
-- [ ] ACKs support.
-- [ ] Room support
-- [ ] Binary attachments framing.
+- [ ] Binary events & ACKs.
 
 ## License
 
